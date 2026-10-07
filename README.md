@@ -64,6 +64,12 @@ node modules/document-access/tests/run.mjs
 npx expo install --check
 ```
 
+```
+// 下载安卓apk
+cd android/app/build/outputs/apk/release
+python3 -m http.server 8000
+```
+
 浏览器测试默认使用已安装的 Chrome；无 Chrome 时先 `npx playwright install chromium`。原生构建、模拟器与真机验收分别记录，详见 [验证记录](docs/验证记录.md)。
 
 [技术方案](docs/技术方案.md) · [实施清单](docs/实施清单.md) · [目录权限模块](modules/document-access/README.md)
