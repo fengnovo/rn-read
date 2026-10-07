@@ -1,0 +1,15 @@
+node_modules/
+.expo/
+dist/
+coverage/
+ios/Pods/
+android/.gradle/
+android/local.properties
+android/app/build/
+android/build/
+android/.cxx/
+android/app/.cxx/
+ios/build/
+ios/.xcode.env.local
+*.log
+.DS_Store

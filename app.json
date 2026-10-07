@@ -1,0 +1,23 @@
+{
+  "expo": {
+    "name": "RN Read",
+    "slug": "rn-read",
+    "version": "1.0.0",
+    "orientation": "default",
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "bundleIdentifier": "com.keen.rnread",
+      "supportsTablet": true,
+      "infoPlist": {
+        "UIFileSharingEnabled": true,
+        "LSSupportsOpeningDocumentsInPlace": true
+      }
+    },
+    "android": {
+      "package": "com.keen.rnread",
+      "permissions": ["INTERNET"]
+    },
+    "plugins": ["expo-sqlite", "expo-asset"],
+    "assetBundlePatterns": ["assets/**/*"]
+  }
+}
