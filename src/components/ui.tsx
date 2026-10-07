@@ -11,6 +11,8 @@ import {
 import { Feather } from "@expo/vector-icons";
 import { usePalette } from "../app/context";
 import { cancelled } from "../services/documents";
+
+/** 忽略系统文件选择器的主动取消，其余错误统一用原生提示呈现。 */
 export function showError(error: unknown) {
   if (!cancelled(error))
     Alert.alert(
@@ -18,6 +20,8 @@ export function showError(error: unknown) {
       error instanceof Error ? error.message : String(error),
     );
 }
+
+/** 可复用操作按钮；iconOnly 仍保留 label 作为无障碍描述。 */
 export function Action({
   label,
   onPress,
@@ -94,6 +98,8 @@ export function Action({
     </Pressable>
   );
 }
+
+/** 空列表的统一插画、标题和说明布局。 */
 export function Empty({ title, detail }: { title: string; detail: string }) {
   const { colors } = usePalette();
   return (
@@ -113,6 +119,8 @@ export function Empty({ title, detail }: { title: string; detail: string }) {
     </View>
   );
 }
+
+/** 长任务的统一进度提示；label 由调用页面提供具体阶段。 */
 export function Busy({ label }: { label: string }) {
   const { colors } = usePalette();
   return (
@@ -125,6 +133,8 @@ export function Busy({ label }: { label: string }) {
     </View>
   );
 }
+
+/** 资料库和目录列表的统一条目；长按回调由页面提供管理菜单。 */
 export function Row({
   title,
   subtitle,
@@ -186,6 +196,8 @@ export function Row({
     </Pressable>
   );
 }
+
+/** 页面共享的布局样式，颜色由组件根据当前系统主题注入。 */
 export const styles = StyleSheet.create({
   screen: { flex: 1 },
   list: { padding: 16, gap: 10, paddingBottom: 32 },
@@ -229,6 +241,8 @@ export const styles = StyleSheet.create({
   },
   hint: { paddingHorizontal: 16, paddingBottom: 12, lineHeight: 22 },
 });
+
+/** 用适合列表展示的单位格式化字节数。 */
 export const formatSize = (bytes: number) =>
   bytes < 1024 * 1024
     ? `${Math.ceil(bytes / 1024)} KB`

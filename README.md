@@ -13,6 +13,17 @@ npm run ios
 npm run android
 ```
 
+在已安装的 Android/iOS 模拟器上重新构建 Release 包、安装并启动：
+
+```sh
+npm run ios:release
+npm run android:release
+# 按顺序构建并启动两端
+npm run simulators:release
+```
+
+脚本会优先选择当前已启动的模拟器；没有运行中的模拟器时，会自动启动一个可用的 iPhone Simulator 或 Android AVD。指定设备可分别设置 `IOS_SIMULATOR_ID` 或 `ANDROID_SERIAL`。Android SDK 可通过 `ANDROID_HOME`/`ANDROID_SDK_ROOT` 指定，JDK 可通过 `JAVA_HOME` 指定。构建产物位于 `android/app/build/outputs/apk/release/app-release.apk` 和临时目录下的 `rn-read-ios-release`。安装采用覆盖更新，通常会保留应用里的阅读记录和缓存。
+
 macOS 如果命令行未找到 Java，可使用 Android Studio 自带的 JDK：
 
 ```sh

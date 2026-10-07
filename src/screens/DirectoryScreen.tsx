@@ -14,6 +14,8 @@ import {
   showError,
   formatSize,
 } from "../components/ui";
+
+/** 浏览已授权目录，并将选中的 Markdown/PDF 导入后交给 ReaderScreen 打开。 */
 export function DirectoryScreen({
   route,
   navigation,
@@ -26,18 +28,21 @@ export function DirectoryScreen({
     [busy, setBusy] = useState("读取目录…"),
     [error, setError] = useState("");
   useEffect(() => {
+    // 返回或切换目录后，旧请求即使完成也不能覆盖新页面的列表状态。
     let live = true;
     setBusy("读取目录…");
     setError("");
     void (async () => {
       await ready;
-      const f = (await library.folders()).find((f) => f.id === route.params.id);
-      if (!f) throw Error("目录记录已移除");
-      const data = await documents.list(f, path);
+      const folder = (await library.folders()).find(
+        (savedFolder) => savedFolder.id === route.params.id,
+      );
+      if (!folder) throw Error("目录记录已移除");
+      const directoryEntries = await documents.list(folder, path);
       if (live) {
-        setFolder(f);
-        setEntries(data);
-        navigation.setOptions({ title: f.name });
+        setFolder(folder);
+        setEntries(directoryEntries);
+        navigation.setOptions({ title: folder.name });
       }
     })()
       .catch((e) => {

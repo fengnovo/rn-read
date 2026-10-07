@@ -16,6 +16,8 @@ import { Action, Busy, styles, showError } from "../components/ui";
 import { normalizeBrowserUrl } from "../core/paths";
 import { CaptureReceiver } from "../core/capture";
 import { read } from "../storage/files";
+
+/** 内置浏览器：显示网页，并把 WebView 通过分块协议交来的内容保存为离线副本。 */
 export function BrowserScreen() {
   const route = useRoute();
   const initial =
@@ -26,59 +28,63 @@ export function BrowserScreen() {
     navigation = useNavigation<NativeStackNavigationProp<RootStack>>();
   const [url, setUrl] = useState(initial),
     [address, setAddress] = useState(initial),
-    [nav, setNav] = useState({ back: false, forward: false }),
+    [navigationState, setNavigationState] = useState({
+      back: false,
+      forward: false,
+    }),
     [loading, setLoading] = useState(0),
     [busy, setBusy] = useState("");
-  const web = useRef<WebView>(null),
-    current = useRef(initial),
-    active = useRef<{
+  const browserWebView = useRef<WebView>(null),
+    currentPageUrl = useRef(initial),
+    // 接收器、取消控制器和超时器属于同一次保存，导航或离开页面时一起作废。
+    activeCapture = useRef<{
       receiver: CaptureReceiver;
       controller: AbortController;
       timer: ReturnType<typeof setTimeout>;
     } | null>(null);
   const cancel = useCallback(() => {
-    active.current?.controller.abort();
-    if (active.current) clearTimeout(active.current.timer);
-    active.current = null;
+    activeCapture.current?.controller.abort();
+    if (activeCapture.current) clearTimeout(activeCapture.current.timer);
+    activeCapture.current = null;
     setBusy("");
   }, []);
   useEffect(
     () => () => {
-      active.current?.controller.abort();
-      if (active.current) clearTimeout(active.current.timer);
+      activeCapture.current?.controller.abort();
+      if (activeCapture.current) clearTimeout(activeCapture.current.timer);
     },
     [],
   );
-  const go = () => {
+  const navigateToAddress = () => {
     try {
       const target = normalizeBrowserUrl(address);
       cancel();
       setUrl(target);
-      current.current = target;
+      currentPageUrl.current = target;
     } catch (e) {
       showError(e);
     }
   };
-  const save = useCallback(
+  const saveCurrentPage = useCallback(
     async (mode: "reader" | "snapshot") => {
       try {
         await ready;
         cancel();
-        const id = Crypto.randomUUID();
+        const captureId = Crypto.randomUUID();
         const controller = new AbortController();
         setBusy("正在捕获当前已加载内容…");
         const timer = setTimeout(() => {
           cancel();
           Alert.alert("捕获超时", "请等待网页内容加载后重试。");
         }, 30000);
-        active.current = {
-          receiver: new CaptureReceiver(id),
+        activeCapture.current = {
+          receiver: new CaptureReceiver(captureId),
           controller,
           timer,
         };
-        web.current?.injectJavaScript(
+        browserWebView.current?.injectJavaScript(
           (await read("runtime/capture.js")) +
-            `;window.RNReadCapture(${JSON.stringify(id)},${JSON.stringify(mode)});true;`,
+            `;window.RNReadCapture(${JSON.stringify(captureId)},${JSON.stringify(mode)});true;`,
         );
       } catch (e) {
         cancel();
@@ -87,20 +93,22 @@ export function BrowserScreen() {
     },
     [cancel, ready],
   );
+  /** 只接收当前任务的捕获分块，并在完整快照到达后启动离线保存。 */
   const onMessage = async (data: string) => {
-    const task = active.current;
-    if (!task || data.length > 1024 * 1024) return;
+    const captureTask = activeCapture.current;
+    if (!captureTask || data.length > 1024 * 1024) return;
     try {
-      const capture = task.receiver.accept(JSON.parse(data));
+      const capture = captureTask.receiver.accept(JSON.parse(data));
       if (!capture) return;
-      clearTimeout(task.timer);
+      clearTimeout(captureTask.timer);
       const resource = await offline.save(
         capture,
         setBusy,
-        task.controller.signal,
+        captureTask.controller.signal,
       );
-      if (active.current !== task) return;
-      active.current = null;
+      // 保存期间用户可能已经取消或离开页面；旧任务完成后不能弹出过期结果。
+      if (activeCapture.current !== captureTask) return;
+      activeCapture.current = null;
       setBusy("");
       Alert.alert(
         resource.warnings.length ? "已保存，有部分资源缺失" : "已保存离线",
@@ -114,9 +122,9 @@ export function BrowserScreen() {
         ],
       );
     } catch (e) {
-      if (active.current === task) {
+      if (activeCapture.current === captureTask) {
         cancel();
-        if (!task.controller.signal.aborted) showError(e);
+        if (!captureTask.controller.signal.aborted) showError(e);
         else if (!(e instanceof Error && e.name === "AbortError")) showError(e);
       }
     }
@@ -130,21 +138,21 @@ export function BrowserScreen() {
             label="后退"
             icon="arrow-left"
             iconOnly
-            disabled={!nav.back}
-            onPress={() => web.current?.goBack()}
+            disabled={!navigationState.back}
+            onPress={() => browserWebView.current?.goBack()}
           />
           <Action
             label="前进"
             icon="arrow-right"
             iconOnly
-            disabled={!nav.forward}
-            onPress={() => web.current?.goForward()}
+            disabled={!navigationState.forward}
+            onPress={() => browserWebView.current?.goForward()}
           />
           <Action
             label="刷新"
             icon="refresh-cw"
             iconOnly
-            onPress={() => web.current?.reload()}
+            onPress={() => browserWebView.current?.reload()}
           />
           <Action
             label="保存离线"
@@ -161,13 +169,13 @@ export function BrowserScreen() {
                   {
                     text: "阅读模式",
                     onPress: () => {
-                      void save("reader");
+                      void saveCurrentPage("reader");
                     },
                   },
                   {
                     text: "原样快照",
                     onPress: () => {
-                      void save("snapshot");
+                      void saveCurrentPage("snapshot");
                     },
                   },
                 ],
@@ -183,7 +191,13 @@ export function BrowserScreen() {
         </View>
       ),
     });
-  }, [busy, nav.back, nav.forward, navigation, save]);
+  }, [
+    busy,
+    navigationState.back,
+    navigationState.forward,
+    navigation,
+    saveCurrentPage,
+  ]);
   return (
     <View style={[styles.screen, { backgroundColor: colors.bg }]}>
       <View
@@ -202,7 +216,7 @@ export function BrowserScreen() {
           returnKeyType="go"
           value={address}
           onChangeText={setAddress}
-          onSubmitEditing={go}
+          onSubmitEditing={navigateToAddress}
           style={{
             flex: 1,
             minHeight: 48,
@@ -214,7 +228,7 @@ export function BrowserScreen() {
             backgroundColor: colors.card,
           }}
         />
-        <Action label="前往" onPress={go} />
+        <Action label="前往" onPress={navigateToAddress} />
       </View>
       {busy ? (
         <View>
@@ -225,7 +239,7 @@ export function BrowserScreen() {
         <Busy label={`网页加载 ${Math.round(loading * 100)}%`} />
       ) : null}
       <WebView
-        ref={web}
+        ref={browserWebView}
         source={{ uri: url }}
         javaScriptEnabled
         domStorageEnabled
@@ -238,10 +252,15 @@ export function BrowserScreen() {
           /^https?:\/\//i.test(r.url) || r.url === "about:blank"
         }
         onNavigationStateChange={(state) => {
-          if (active.current && state.url !== current.current) cancel();
-          current.current = state.url;
+          // 捕获期间跳到新页面就取消，避免把下一个页面误存为当前快照。
+          if (activeCapture.current && state.url !== currentPageUrl.current)
+            cancel();
+          currentPageUrl.current = state.url;
           setAddress(state.url);
-          setNav({ back: state.canGoBack, forward: state.canGoForward });
+          setNavigationState({
+            back: state.canGoBack,
+            forward: state.canGoForward,
+          });
         }}
         style={{ flex: 1 }}
       />

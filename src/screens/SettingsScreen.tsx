@@ -3,11 +3,14 @@ import { View, Text, ScrollView, Alert } from "react-native";
 import { useServices, usePalette } from "../app/context";
 import { Action, Busy, styles, formatSize, showError } from "../components/ui";
 import * as files from "../storage/files";
+
+/** 查看应用私有阅读数据占用，并清理可随时重新生成的 WebView 缓存。 */
 export function SettingsScreen() {
   const { ready } = useServices(),
     { colors } = usePalette();
   const [sizes, setSizes] = useState<Record<string, number>>({}),
     [busy, setBusy] = useState(false);
+  /** 逐个统计正文、缓存和未完成事务目录的大小。 */
   const refresh = async () => {
     await ready;
     const result: Record<string, number> = {};
@@ -70,7 +73,9 @@ export function SettingsScreen() {
       />
       {busy && <Busy label="正在清理…" />}
       <Text style={{ color: colors.muted, lineHeight: 24 }}>
-        长按资料条目可删除对应本地副本。目录授权不保证云端文件离线可访问；导入后的文件副本可以直接从手机打开。
+        {"长按资料条目可删除对应本地副本。" +
+          "目录授权不保证云端文件离线可访问；" +
+          "导入后的文件副本可以直接从手机打开。"}
       </Text>
     </ScrollView>
   );

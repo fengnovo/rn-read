@@ -6,6 +6,8 @@ import { Documents } from "../services/documents";
 import { OfflinePages } from "../services/offline";
 import { initializeFiles } from "../storage/files";
 import { recover } from "../services/maintenance";
+
+/** 所有页面共用的业务服务；ready 在数据库、运行时资源和恢复任务均完成后才结束。 */
 type Services = {
   library: Library;
   documents: Documents;
@@ -13,6 +15,8 @@ type Services = {
   ready: Promise<void>;
 };
 const Context = createContext<Services | null>(null);
+
+/** 在应用根部创建一次数据库和服务，并在初始化完成前展示加载状态。 */
 export function ServicesProvider({ children }: { children: React.ReactNode }) {
   const [services, setServices] = useState<Services | null>(null),
     [error, setError] = useState("");
@@ -22,6 +26,7 @@ export function ServicesProvider({ children }: { children: React.ReactNode }) {
       const db = await openDatabaseAsync("rn-read.db");
       const library = new Library(db);
       await library.initialize();
+      // 文件目录和离线 WebView 运行时代码必须先就绪，之后才扫描并修复中断任务。
       const ready = initializeFiles().then(() => recover(library));
       ready.catch((error) => {
         if (mounted) setError(String(error));
@@ -54,11 +59,15 @@ export function ServicesProvider({ children }: { children: React.ReactNode }) {
     );
   return <Context.Provider value={services}>{children}</Context.Provider>;
 }
+
+/** 获取全局服务；缺少 Provider 是程序装配错误，应尽早报出。 */
 export function useServices() {
   const services = useContext(Context);
   if (!services) throw Error("ServicesProvider missing");
   return services;
 }
+
+/** 返回遵循系统明暗模式的调色板，供页面和通用组件共用。 */
 export function usePalette() {
   const dark = useColorScheme() === "dark";
   return {

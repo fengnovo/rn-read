@@ -15,8 +15,34 @@ import {
   formatSize,
 } from "../components/ui";
 import { removeResource } from "../services/maintenance";
-type Item =
+type LibraryItem =
   { kind: "resource"; value: Resource } | { kind: "folder"; value: Folder };
+
+/** 把资源类型、阅读位置和离线状态组合成列表中的辅助说明。 */
+function describeResource(resource: Resource) {
+  const typeLabel =
+    resource.type === "pdf"
+      ? "PDF"
+      : resource.type === "markdown"
+        ? "Markdown"
+        : "离线网页";
+  const readingPosition =
+    resource.type === "pdf"
+      ? `第 ${resource.position.page ?? 1} 页`
+      : `${Math.round((resource.position.progress ?? 0) * 100)}%`;
+  const resourceWarnings = resource.warnings.length ? "有资源缺失" : null;
+
+  return [
+    typeLabel,
+    readingPosition,
+    formatSize(resource.size),
+    resourceWarnings,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+/** 展示最近阅读、已导入文件或离线网页，并负责分页、导入与副本管理。 */
 export function LibraryScreen({
   mode,
 }: {
@@ -25,9 +51,10 @@ export function LibraryScreen({
   const { library, documents, ready } = useServices(),
     { colors } = usePalette();
   const navigation = useNavigation<NativeStackNavigationProp<RootStack>>();
-  const [items, setItems] = useState<Item[]>([]),
+  const [items, setItems] = useState<LibraryItem[]>([]),
     [busy, setBusy] = useState("");
   const mounted = useRef(true),
+    // 刷新后到达的旧分页结果会失效，避免列表顺序倒退或重复追加。
     revision = useRef(0),
     offset = useRef(0),
     complete = useRef(false),
@@ -40,6 +67,7 @@ export function LibraryScreen({
       revision.current++;
     };
   }, []);
+  /** 重新读取当前 tab 的首屏，并使先前正在执行的分页请求失效。 */
   const refresh = useCallback(async () => {
     const request = ++revision.current;
     loading.current = true;
@@ -53,17 +81,20 @@ export function LibraryScreen({
       if (!mounted.current || request !== revision.current) return;
       offset.current = resources.length;
       complete.current = mode === "recent" || resources.length < 60;
-      const list: Item[] = [
+      const displayItems: LibraryItem[] = [
         ...resources.map((value) => ({ kind: "resource" as const, value })),
         ...folders.map((value) => ({ kind: "folder" as const, value })),
       ];
       setItems(
-        list.sort((a, b) => b.value.lastOpenedAt - a.value.lastOpenedAt),
+        displayItems.sort(
+          (left, right) => right.value.lastOpenedAt - left.value.lastOpenedAt,
+        ),
       );
     } finally {
       if (request === revision.current) loading.current = false;
     }
   }, [library, mode]);
+  /** 文件/离线页滚动到底部时读取下一页，并按 id 去除重叠结果。 */
   const loadMore = async () => {
     if (loading.current || complete.current || mode === "recent") return;
     loading.current = true;
@@ -77,16 +108,20 @@ export function LibraryScreen({
       if (!mounted.current || request !== revision.current) return;
       offset.current += rows.length;
       complete.current = rows.length < 60;
-      setItems((old) => {
+      setItems((existingItems) => {
         const ids = new Set(
-          old.filter((x) => x.kind === "resource").map((x) => x.value.id),
+          existingItems
+            .filter((item) => item.kind === "resource")
+            .map((item) => item.value.id),
         );
         return [
-          ...old,
+          ...existingItems,
           ...rows
-            .filter((r) => !ids.has(r.id))
+            .filter((resource) => !ids.has(resource.id))
             .map((value) => ({ kind: "resource" as const, value })),
-        ].sort((a, b) => b.value.lastOpenedAt - a.value.lastOpenedAt);
+        ].sort(
+          (left, right) => right.value.lastOpenedAt - left.value.lastOpenedAt,
+        );
       });
     } catch (e) {
       if (mounted.current) showError(e);
@@ -109,16 +144,16 @@ export function LibraryScreen({
       };
     }, [refresh, ready]),
   );
-  const choose = async (folder: boolean) => {
-    setBusy(folder ? "正在授权目录…" : "正在导入文件与图片…");
+  const choose = async (chooseDirectory: boolean) => {
+    setBusy(chooseDirectory ? "正在授权目录…" : "正在导入文件与图片…");
     try {
       await ready;
-      if (folder) {
-        const f = await documents.chooseFolder();
-        navigation.navigate("Directory", { id: f.id });
+      if (chooseDirectory) {
+        const folder = await documents.chooseFolder();
+        navigation.navigate("Directory", { id: folder.id });
       } else {
-        const r = await documents.chooseFile();
-        navigation.navigate("Reader", { id: r.id });
+        const resource = await documents.chooseFile();
+        navigation.navigate("Reader", { id: resource.id });
       }
       await refresh();
     } catch (e) {
@@ -127,14 +162,14 @@ export function LibraryScreen({
       setBusy("");
     }
   };
-  const open = (item: Item) =>
+  const open = (item: LibraryItem) =>
     item.kind === "resource"
       ? navigation.navigate("Reader", { id: item.value.id })
       : navigation.navigate("Directory", {
           id: item.value.id,
           path: item.value.lastPath,
         });
-  const manage = (item: Item) => {
+  const manage = (item: LibraryItem) => {
     const buttons: any[] = [{ text: "取消", style: "cancel" }];
     if (item.kind === "resource") {
       if (mode === "recent")
@@ -238,7 +273,7 @@ export function LibraryScreen({
           ) : (
             <Row
               title={item.value.title}
-              subtitle={`${item.value.type === "pdf" ? "PDF" : item.value.type === "markdown" ? "Markdown" : "离线网页"} · ${item.value.type === "pdf" ? `第 ${item.value.position.page ?? 1} 页` : `${Math.round((item.value.position.progress ?? 0) * 100)}%`} · ${formatSize(item.value.size)}${item.value.warnings.length ? " · 有资源缺失" : ""}`}
+              subtitle={describeResource(item.value)}
               icon={item.value.type === "web" ? "globe" : "file-text"}
               onPress={() => open(item)}
               onLongPress={() => manage(item)}

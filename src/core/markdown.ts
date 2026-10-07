@@ -1,5 +1,7 @@
 import MarkdownIt from "markdown-it";
 import { headingId } from "./headings";
+
+/** 创建共用的 Markdown 解析器，并为标题补上可跳转的 id。 */
 export function createMarkdown() {
   const md = new MarkdownIt({ html: false, linkify: true });
   md.core.ruler.push("heading_ids", (state) => {

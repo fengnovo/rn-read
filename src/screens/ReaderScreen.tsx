@@ -16,26 +16,33 @@ import {
   prepareDiagram,
 } from "../services/readers";
 import * as files from "../storage/files";
+
+/** 校验来自 WebView 的阅读位置，只接受有限且处于合理范围内的数据。 */
 function safePosition(value: unknown): Position | null {
   if (!value || typeof value !== "object") return null;
-  const p = value as Position;
+  const positionData = value as Position;
   if (
-    !Number.isFinite(p.scrollY) ||
-    !Number.isFinite(p.progress) ||
-    Number(p.progress) < 0 ||
-    Number(p.progress) > 1
+    !Number.isFinite(positionData.scrollY) ||
+    !Number.isFinite(positionData.progress) ||
+    Number(positionData.progress) < 0 ||
+    Number(positionData.progress) > 1
   )
     return null;
   return {
     version: 1,
-    scrollY: Math.max(0, Math.min(1e8, p.scrollY!)),
-    progress: p.progress,
-    anchor: typeof p.anchor === "string" ? p.anchor.slice(0, 200) : undefined,
-    offset: Number.isFinite(p.offset)
-      ? Math.max(-1e5, Math.min(1e5, p.offset!))
+    scrollY: Math.max(0, Math.min(1e8, positionData.scrollY!)),
+    progress: positionData.progress,
+    anchor:
+      typeof positionData.anchor === "string"
+        ? positionData.anchor.slice(0, 200)
+        : undefined,
+    offset: Number.isFinite(positionData.offset)
+      ? Math.max(-1e5, Math.min(1e5, positionData.offset!))
       : 0,
   };
 }
+
+/** 根据资料类型打开 PDF 或 WebView 阅读器，并持续保存页码/滚动位置。 */
 export function ReaderScreen({
   route,
   navigation,
@@ -59,27 +66,32 @@ export function ReaderScreen({
     sessionRef = useRef<Session | null>(null),
     generation = useRef(0),
     active = useRef(true);
-  const makeSession = (r: Resource) => ({
+  const createReadingSession = (resourceToOpen: Resource) => ({
     writer: createPositionWriter(
-      r.position,
-      (p) => library.savePosition(r.id, p),
+      resourceToOpen.position,
+      (position) => library.savePosition(resourceToOpen.id, position),
       showError,
     ),
-    ready: r.type === "pdf",
+    ready: resourceToOpen.type === "pdf",
     closed: false,
     suspended: false,
     key: ++generation.current,
   });
-  const persist = (p: Position, force = false) => {
+  const persist = (positionUpdate: Position, force = false) => {
     if (session?.ready)
-      session.writer.update(p, force || session.closed || session.suspended);
+      session.writer.update(
+        positionUpdate,
+        force || session.closed || session.suspended,
+      );
   };
+  /** 页面失焦、进后台或卸载前，先让 WebView 上报最后一个滚动位置再写入数据库。 */
   const flush = () => {
     if (sessionRef.current) sessionRef.current.suspended = true;
     web.current?.injectJavaScript("window.RNRead?.flush(); true;");
     void sessionRef.current?.writer.flush();
   };
   useEffect(() => {
+    // 先加载资源记录，再生成带主题和位置的 reader HTML；异步返回时页面可能已卸载。
     let live = true;
     active.current = true;
     setBusy(true);
@@ -91,22 +103,22 @@ export function ReaderScreen({
     let opened: Session | null = null;
     void (async () => {
       await ready;
-      const r = await library.get(route.params.id);
-      if (!r) throw Error("资料记录不存在");
-      await library.touch(r.id);
+      const resource = await library.get(route.params.id);
+      if (!resource) throw Error("资料记录不存在");
+      await library.touch(resource.id);
       const prepared =
-        r.type === "pdf"
-          ? files.uri(r.localPath)
-          : await prepareReader(r, dark, route.params.initialAnchor);
+        resource.type === "pdf"
+          ? files.uri(resource.localPath)
+          : await prepareReader(resource, dark, route.params.initialAnchor);
       if (!live) return;
-      opened = makeSession(r);
+      opened = createReadingSession(resource);
       sessionRef.current = opened;
       setSession(opened);
-      navigation.setOptions({ title: r.title });
+      navigation.setOptions({ title: resource.title });
       if (live) {
-        setResource(r);
+        setResource(resource);
         setEntry(prepared);
-        if (r.type === "pdf") setBusy(false);
+        if (resource.type === "pdf") setBusy(false);
       }
     })().catch((e) => {
       if (live) {
@@ -132,6 +144,7 @@ export function ReaderScreen({
     navigation,
   ]);
   useEffect(() => {
+    // WebView 在内容布局稳定前不保存位置；后台或离开时由 flush 强制落盘。
     const sub = AppState.addEventListener("change", (state) => {
       if (sessionRef.current) sessionRef.current.suspended = state !== "active";
       if (state !== "active") flush();
@@ -171,15 +184,16 @@ export function ReaderScreen({
       ...(fragment ? { initialAnchor: fragment } : {}),
     });
   };
+  /** 处理本地 reader runtime 发来的进度、图表和链接消息，并校验消息体积。 */
   const onMessage = (data: string) => {
     if (!session || data.length > 5 * 1024 * 1024) return;
     try {
       const message = JSON.parse(data);
       if (message.type === "POSITION") {
-        const p = safePosition(message.position);
-        if (p && session.ready)
+        const position = safePosition(message.position);
+        if (position && session.ready)
           session.writer.update(
-            p,
+            position,
             session.closed || session.suspended || !active.current,
           );
         return;
@@ -208,28 +222,36 @@ export function ReaderScreen({
       }
     } catch {}
   };
+  /** 单独选择 Markdown 所在目录后重新导入，才能读取其相对图片。 */
   const associate = async () => {
-    const original = session;
+    const previousSession = session;
     try {
       await ready;
-      await original?.writer.flush();
+      await previousSession?.writer.flush();
       const folder = await documents.chooseFolder();
-      const r = await documents.openRelative(folder, resource!.title);
-      if (!active.current || sessionRef.current !== original) return;
+      const importedResource = await documents.openRelative(
+        folder,
+        resource!.title,
+      );
+      if (!active.current || sessionRef.current !== previousSession) return;
       setBusy(true);
-      const prepared = await prepareReader(r, dark, route.params.initialAnchor);
-      if (!active.current || sessionRef.current !== original) return;
-      setResource(r);
+      const prepared = await prepareReader(
+        importedResource,
+        dark,
+        route.params.initialAnchor,
+      );
+      if (!active.current || sessionRef.current !== previousSession) return;
+      setResource(importedResource);
       if (session) {
         session.closed = true;
         void session.writer.flush();
       }
-      const replacement = makeSession(r);
+      const replacement = createReadingSession(importedResource);
       sessionRef.current = replacement;
       setSession(replacement);
       setEntry(prepared);
     } catch (e) {
-      if (active.current && sessionRef.current === original) {
+      if (active.current && sessionRef.current === previousSession) {
         setBusy(false);
         showError(e);
       }
@@ -340,6 +362,8 @@ export function ReaderScreen({
     </SafeAreaView>
   );
 }
+
+/** 展示独立 Mermaid 图表页面，缩放和拖动由共享 WebView runtime 处理。 */
 export function DiagramScreen({
   route,
 }: NativeStackScreenProps<RootStack, "Diagram">) {

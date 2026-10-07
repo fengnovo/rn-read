@@ -1,6 +1,9 @@
 import type { Position } from "./types";
-// Keep the latest position, including the quiet tail of a burst, and serialize
-// writes so a slow earlier save cannot replace the final position.
+
+/**
+ * 合并阅读器连续发出的滚动位置，并按顺序写入数据库。
+ * 普通滚动最多每 600ms 保存一次；离开页面或切到后台时可调用 flush 立即落盘。
+ */
 export function createPositionWriter(
   initial: Position,
   save: (position: Position) => Promise<unknown>,

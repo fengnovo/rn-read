@@ -2,40 +2,41 @@ import DOMPurify from "dompurify";
 import mermaid from "mermaid";
 import { headingId } from "../core/headings";
 
-const cfg = window.__RN_READ__ ?? {};
+// 原生端在加载本文件前注入文档内容、主题、缓存图表和阅读位置。
+const readerOptions = window.__RN_READ__ ?? {};
 history.scrollRestoration = "manual";
-const send = (message: object) =>
+const sendToNative = (message: object) =>
   window.ReactNativeWebView?.postMessage(JSON.stringify(message));
-const cleanSVG = (svg: string) =>
+const sanitizeSvg = (svg: string) =>
   DOMPurify.sanitize(svg, { USE_PROFILES: { svg: true, svgFilters: true } });
 window.RNRead = {
   flush: () => {},
   setTheme: (dark: boolean) =>
     document.documentElement.classList.toggle("dark", dark),
 };
-if (cfg.diagram) {
-  const stage = document.getElementById("reader")!;
-  stage.innerHTML = cleanSVG(cfg.diagram);
-  const svg = stage.querySelector("svg")!;
-  stage.className = "diagram-stage";
+if (readerOptions.diagram) {
+  const diagramStage = document.getElementById("reader")!;
+  diagramStage.innerHTML = sanitizeSvg(readerOptions.diagram);
+  const diagramSvg = diagramStage.querySelector("svg")!;
+  diagramStage.className = "diagram-stage";
   let scale = 1,
-    x = 0,
-    y = 0,
-    start: null | {
+    translateX = 0,
+    translateY = 0,
+    gestureStart: null | {
       distance: number;
       scale: number;
-      x: number;
-      y: number;
-      cx: number;
-      cy: number;
+      translateX: number;
+      translateY: number;
+      centerX: number;
+      centerY: number;
     } = null;
   const apply = () => {
-    svg.style.transform = `translate(${x}px,${y}px) scale(${scale})`;
+    diagramSvg.style.transform = `translate(${translateX}px,${translateY}px) scale(${scale})`;
   };
   const reset = () => {
     scale = 1;
-    x = 0;
-    y = 0;
+    translateX = 0;
+    translateY = 0;
     apply();
   };
   document.getElementById("reset")?.addEventListener("click", reset);
@@ -47,87 +48,108 @@ if (cfg.diagram) {
     scale = Math.max(0.3, scale / 1.3);
     apply();
   });
-  stage.addEventListener(
+  // 双指按两指间距缩放，并以手指中心点为锚；单指拖动只调整平移量。
+  diagramStage.addEventListener(
     "touchstart",
-    (e) => {
-      e.preventDefault();
-      const a = e.touches[0],
-        b = e.touches[1];
-      if (!a) return;
-      start = {
-        distance: b
-          ? Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY)
+    (event) => {
+      event.preventDefault();
+      const firstTouch = event.touches[0];
+      const secondTouch = event.touches[1];
+      if (!firstTouch) return;
+      gestureStart = {
+        distance: secondTouch
+          ? Math.hypot(
+              firstTouch.clientX - secondTouch.clientX,
+              firstTouch.clientY - secondTouch.clientY,
+            )
           : 0,
         scale,
-        x,
-        y,
-        cx: b ? (a.clientX + b.clientX) / 2 : a.clientX,
-        cy: b ? (a.clientY + b.clientY) / 2 : a.clientY,
+        translateX,
+        translateY,
+        centerX: secondTouch
+          ? (firstTouch.clientX + secondTouch.clientX) / 2
+          : firstTouch.clientX,
+        centerY: secondTouch
+          ? (firstTouch.clientY + secondTouch.clientY) / 2
+          : firstTouch.clientY,
       };
     },
     { passive: false },
   );
-  stage.addEventListener(
+  diagramStage.addEventListener(
     "touchmove",
-    (e) => {
-      e.preventDefault();
-      if (!start) return;
-      const a = e.touches[0],
-        b = e.touches[1];
-      if (!a) return;
-      if (b && start.distance) {
+    (event) => {
+      event.preventDefault();
+      if (!gestureStart) return;
+      const firstTouch = event.touches[0];
+      const secondTouch = event.touches[1];
+      if (!firstTouch) return;
+      if (secondTouch && gestureStart.distance) {
         scale = Math.max(
           0.3,
           Math.min(
             12,
-            (start.scale *
-              Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY)) /
-              start.distance,
+            (gestureStart.scale *
+              Math.hypot(
+                firstTouch.clientX - secondTouch.clientX,
+                firstTouch.clientY - secondTouch.clientY,
+              )) /
+              gestureStart.distance,
           ),
         );
-        x = start.x + (a.clientX + b.clientX) / 2 - start.cx;
-        y = start.y + (a.clientY + b.clientY) / 2 - start.cy;
-      } else if (!b && !start.distance) {
-        x = start.x + a.clientX - start.cx;
-        y = start.y + a.clientY - start.cy;
+        translateX =
+          gestureStart.translateX +
+          (firstTouch.clientX + secondTouch.clientX) / 2 -
+          gestureStart.centerX;
+        translateY =
+          gestureStart.translateY +
+          (firstTouch.clientY + secondTouch.clientY) / 2 -
+          gestureStart.centerY;
+      } else if (!secondTouch && !gestureStart.distance) {
+        translateX =
+          gestureStart.translateX + firstTouch.clientX - gestureStart.centerX;
+        translateY =
+          gestureStart.translateY + firstTouch.clientY - gestureStart.centerY;
       }
       apply();
     },
     { passive: false },
   );
-  stage.addEventListener("touchend", () => {
-    start = null;
+  diagramStage.addEventListener("touchend", () => {
+    gestureStart = null;
   });
-  send({ type: "READY" });
+  sendToNative({ type: "READY" });
 } else {
-  const root = document.getElementById("reader")!;
-  root.innerHTML = DOMPurify.sanitize(cfg.html ?? "", {
+  const readerRoot = document.getElementById("reader")!;
+  // 阅读正文再次经过白名单消毒；保存时的净化不能替代展示前的安全边界。
+  readerRoot.innerHTML = DOMPurify.sanitize(readerOptions.html ?? "", {
     ADD_ATTR: ["data-link", "data-svg-key"],
     FORBID_TAGS: ["iframe", "object", "embed", "form"],
     FORBID_ATTR: ["srcset"],
   });
-  root.querySelectorAll("img[src]").forEach((img) => {
-    const src = img.getAttribute("src") ?? "";
-    if (/^(https?:|\/\/)/i.test(src)) {
-      img.removeAttribute("src");
-      img.setAttribute("alt", "图片未保存离线");
+  readerRoot.querySelectorAll("img[src]").forEach((image) => {
+    const imageSource = image.getAttribute("src") ?? "";
+    if (/^(https?:|\/\/)/i.test(imageSource)) {
+      // 离线阅读不偷偷访问网络；未保存的远程图片明确显示为缺失资源。
+      image.removeAttribute("src");
+      image.setAttribute("alt", "图片未保存离线");
     }
   });
   const usedIds = new Set(
-    Array.from(root.querySelectorAll("[id]"), (el) => el.id),
+    Array.from(readerRoot.querySelectorAll("[id]"), (element) => element.id),
   );
-  root.querySelectorAll("h1,h2,h3,h4,h5,h6").forEach((el) => {
-    if (!el.id) el.id = headingId(el.textContent ?? "", usedIds);
+  readerRoot.querySelectorAll("h1,h2,h3,h4,h5,h6").forEach((heading) => {
+    if (!heading.id) heading.id = headingId(heading.textContent ?? "", usedIds);
   });
-  root
+  readerRoot
     .querySelectorAll("h1,h2,h3,h4,h5,h6,p,pre,table,blockquote")
-    .forEach((el, i) => {
-      if (!el.id) el.id = "read-" + i;
+    .forEach((element, index) => {
+      if (!element.id) element.id = "read-" + index;
     });
   mermaid.initialize({
     startOnLoad: false,
     securityLevel: "strict",
-    theme: cfg.dark ? "dark" : "default",
+    theme: readerOptions.dark ? "dark" : "default",
     htmlLabels: false,
     flowchart: { htmlLabels: false },
     maxTextSize: 100000,
@@ -143,24 +165,24 @@ if (cfg.diagram) {
       "htmlLabels",
     ],
   });
-  let ready = false;
+  let contentLayoutReady = false;
   const flush = () => {
-    if (!ready) return;
-    const max = Math.max(
+    if (!contentLayoutReady) return;
+    const maxScrollY = Math.max(
       0,
       document.documentElement.scrollHeight - innerHeight,
     );
     let anchor: Element | undefined;
-    for (const el of root.querySelectorAll("[id]")) {
-      if (el.getBoundingClientRect().top <= 16) anchor = el;
+    for (const element of readerRoot.querySelectorAll("[id]")) {
+      if (element.getBoundingClientRect().top <= 16) anchor = element;
       else break;
     }
-    send({
+    sendToNative({
       type: "POSITION",
       position: {
         version: 1,
         scrollY,
-        progress: max ? Math.min(1, scrollY / max) : 0,
+        progress: maxScrollY ? Math.min(1, scrollY / maxScrollY) : 0,
         anchor: anchor?.id,
         offset: anchor ? -anchor.getBoundingClientRect().top : 0,
       },
@@ -169,7 +191,7 @@ if (cfg.diagram) {
   window.RNRead.flush = flush;
   let timer: number | undefined;
   addEventListener("scroll", () => {
-    if (!ready) return;
+    if (!contentLayoutReady) return;
     clearTimeout(timer);
     timer = setTimeout(flush, 250);
   });
@@ -177,18 +199,18 @@ if (cfg.diagram) {
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) flush();
   });
-  root.addEventListener("click", (e) => {
-    const element = e.target instanceof Element ? e.target : null;
+  readerRoot.addEventListener("click", (event) => {
+    const element = event.target instanceof Element ? event.target : null;
     const diagram = element?.closest(".mermaid")?.querySelector("svg");
     if (diagram) {
-      e.preventDefault();
-      send({ type: "DIAGRAM", svg: cleanSVG(diagram.outerHTML) });
+      event.preventDefault();
+      sendToNative({ type: "DIAGRAM", svg: sanitizeSvg(diagram.outerHTML) });
       return;
     }
-    const a = element?.closest("a");
-    if (!a) return;
-    e.preventDefault();
-    const url = a.getAttribute("href") ?? "";
+    const link = element?.closest("a");
+    if (!link) return;
+    event.preventDefault();
+    const url = link.getAttribute("href") ?? "";
     if (url.startsWith("#")) {
       try {
         document
@@ -197,53 +219,58 @@ if (cfg.diagram) {
       } catch {}
       return;
     }
-    send({ type: "OPEN_LINK", url });
+    sendToNative({ type: "OPEN_LINK", url });
   });
   void (async () => {
     const cache: Record<string, string> = {};
-    const blocks = Array.from(root.querySelectorAll(".mermaid"));
-    for (let i = 0; i < blocks.length; i++) {
-      const block = blocks[i]!;
-      const key = block.getAttribute("data-svg-key") ?? String(i);
+    const diagramBlocks = Array.from(readerRoot.querySelectorAll(".mermaid"));
+    for (
+      let diagramIndex = 0;
+      diagramIndex < diagramBlocks.length;
+      diagramIndex++
+    ) {
+      const block = diagramBlocks[diagramIndex]!;
+      const cacheKey =
+        block.getAttribute("data-svg-key") ?? String(diagramIndex);
       try {
-        let svg = cfg.svgCache?.[key];
-        if (!svg) {
+        let diagramSvg = readerOptions.svgCache?.[cacheKey];
+        if (!diagramSvg) {
           const result = await mermaid.render(
-            "diagram-" + i,
+            "diagram-" + diagramIndex,
             block.textContent ?? "",
           );
-          svg = result.svg;
+          diagramSvg = result.svg;
         }
-        const clean = cleanSVG(svg);
-        block.innerHTML = clean;
-        cache[key] = clean;
+        const sanitizedSvg = sanitizeSvg(diagramSvg);
+        block.innerHTML = sanitizedSvg;
+        cache[cacheKey] = sanitizedSvg;
         block.setAttribute("role", "button");
         block.setAttribute("tabindex", "0");
         block.setAttribute("aria-label", "放大查看图表");
-        block.addEventListener("keydown", (e) => {
+        block.addEventListener("keydown", (event) => {
           if (
-            e instanceof KeyboardEvent &&
-            (e.key === "Enter" || e.key === " ")
+            event instanceof KeyboardEvent &&
+            (event.key === "Enter" || event.key === " ")
           ) {
-            e.preventDefault();
-            send({ type: "DIAGRAM", svg: clean });
+            event.preventDefault();
+            sendToNative({ type: "DIAGRAM", svg: sanitizedSvg });
           }
         });
       } catch {
         block.classList.add("diagram-error");
         block.textContent = "图表语法错误，正文仍可阅读。";
-        document.getElementById("ddiagram-" + i)?.remove();
+        document.getElementById("ddiagram-" + diagramIndex)?.remove();
       }
     }
-    if (Object.keys(cache).length) send({ type: "SVG_CACHE", cache });
+    if (Object.keys(cache).length) sendToNative({ type: "SVG_CACHE", cache });
     await Promise.race([
       Promise.all(
-        [...root.querySelectorAll("img")].map((img) =>
-          img.complete
+        [...readerRoot.querySelectorAll("img")].map((image) =>
+          image.complete
             ? Promise.resolve()
             : new Promise((resolve) => {
-                img.addEventListener("load", resolve, { once: true });
-                img.addEventListener("error", resolve, { once: true });
+                image.addEventListener("load", resolve, { once: true });
+                image.addEventListener("error", resolve, { once: true });
               }),
         ),
       ),
@@ -253,26 +280,31 @@ if (cfg.diagram) {
     await new Promise((resolve) =>
       requestAnimationFrame(() => requestAnimationFrame(resolve)),
     );
-    const p = cfg.position ?? {};
-    const initial = cfg.initialAnchor
-      ? document.getElementById(cfg.initialAnchor)
+    // 图片和字体会改变段落高度；等布局稳定后恢复位置，避免跳到错误段落。
+    const savedPosition = readerOptions.position ?? {};
+    const initialAnchor = readerOptions.initialAnchor
+      ? document.getElementById(readerOptions.initialAnchor)
       : null;
     const anchor =
-      initial ?? (p.anchor ? document.getElementById(p.anchor) : null);
-    const max = Math.max(
+      initialAnchor ??
+      (savedPosition.anchor
+        ? document.getElementById(savedPosition.anchor)
+        : null);
+    const maxScrollY = Math.max(
       0,
       document.documentElement.scrollHeight - innerHeight,
     );
-    const y = anchor
+    const restoredScrollY = anchor
       ? anchor.getBoundingClientRect().top +
         scrollY +
-        (initial ? 0 : (p.offset ?? 0))
-      : Number.isFinite(p.progress)
-        ? max * p.progress
-        : (p.scrollY ?? 0);
-    scrollTo(0, Math.max(0, Math.min(max, y)));
+        (initialAnchor ? 0 : (savedPosition.offset ?? 0))
+      : typeof savedPosition.progress === "number" &&
+          Number.isFinite(savedPosition.progress)
+        ? maxScrollY * savedPosition.progress
+        : (savedPosition.scrollY ?? 0);
+    scrollTo(0, Math.max(0, Math.min(maxScrollY, restoredScrollY)));
     await new Promise((resolve) => requestAnimationFrame(resolve));
-    ready = true;
-    send({ type: "READY" });
-  })().catch((error) => send({ type: "ERROR", error: String(error) }));
+    contentLayoutReady = true;
+    sendToNative({ type: "READY" });
+  })().catch((error) => sendToNative({ type: "ERROR", error: String(error) }));
 }

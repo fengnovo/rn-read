@@ -3,7 +3,13 @@ import { findAll, getText } from "domutils";
 import serialize from "dom-serializer";
 import { Text } from "domhandler";
 import * as css from "css-tree";
+
+/**
+ * 网页内容复制到阅读缓存时，重写 HTML 与 CSS 中本地资源的相对地址。
+ * 仅处理应用保存时生成的 `assets/` 路径，外链和文档锚点保持原样。
+ */
 export function relocateContent(html: string, head: string, prefix: string) {
+  // 正文和 head 样式都会引用同一批资源，因此通过同一个小函数保持路径规则一致。
   const relocate = (value: string) =>
     value.startsWith("assets/") ? prefix + value : value;
   const style = (text: string, context: "stylesheet" | "declarationList") => {
