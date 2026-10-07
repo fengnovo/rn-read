@@ -7,6 +7,8 @@ import type { Resource } from "../src/core/types";
 const env = vi.hoisted(() => ({
   services: null as any,
   appState: null as any,
+  platformOS: "android",
+  routeName: "Browser",
   navigation: {
     setOptions: vi.fn(),
     navigate: vi.fn(),
@@ -18,14 +20,22 @@ const env = vi.hoisted(() => ({
   mounts: 0,
   failWrite: false,
   inject: vi.fn(),
+  goBack: vi.fn(),
   errors: vi.fn(),
+  offlineSave: vi.fn(),
 }));
 vi.mock("react-native", () => ({
   View: "View",
+  Pressable: "Pressable",
   Text: "Text",
   TextInput: "TextInput",
   FlatList: "FlatList",
   Alert: { alert: vi.fn() },
+  Platform: {
+    get OS() {
+      return env.platformOS;
+    },
+  },
   AppState: {
     addEventListener: (_: string, callback: any) => {
       env.appState = callback;
@@ -43,6 +53,7 @@ vi.mock("react-native-webview", async () => {
     WebView: React.forwardRef((props: any, ref: any) => {
       React.useImperativeHandle(ref, () => ({
         injectJavaScript: env.inject,
+        goBack: env.goBack,
         reload: vi.fn(),
       }));
       React.useEffect(() => {
@@ -56,7 +67,7 @@ vi.mock("@react-navigation/native", async () => {
   const React = await import("react");
   return {
     useNavigation: () => env.navigation,
-    useRoute: () => ({ params: {} }),
+    useRoute: () => ({ params: {}, name: env.routeName }),
     useFocusEffect: (callback: any) => React.useEffect(callback, [callback]),
   };
 });
@@ -88,6 +99,7 @@ vi.mock("../src/storage/files", () => ({
 }));
 import { ReaderScreen } from "../src/screens/ReaderScreen";
 import { LibraryScreen } from "../src/screens/LibraryScreen";
+import { FavoritesScreen } from "../src/screens/FavoritesScreen";
 import { BrowserScreen } from "../src/screens/BrowserScreen";
 let db: DatabaseSync, library: Library, tree: ReactTestRenderer;
 const render = async (element: React.ReactElement) => {
@@ -118,6 +130,7 @@ beforeEach(async () => {
   (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
   vi.clearAllMocks();
   env.mounts = 0;
+  env.platformOS = "android";
   env.failWrite = false;
   env.content.clear();
   db = new DatabaseSync(":memory:");
@@ -134,7 +147,17 @@ beforeEach(async () => {
       db.prepare(s).all(...a) as T[],
   });
   await library.initialize();
-  env.services = { library, ready: Promise.resolve(), documents: {} };
+  env.offlineSave.mockResolvedValue({
+    id: "saved-page",
+    title: "Example page",
+    warnings: [],
+  });
+  env.services = {
+    library,
+    ready: Promise.resolve(),
+    documents: {},
+    offline: { save: env.offlineSave },
+  };
 });
 afterEach(async () => {
   if (tree) await act(async () => tree.unmount());
@@ -153,7 +176,7 @@ it("places browser navigation and offline controls in the top bar as icon-only a
   ) as React.ReactElement[];
 
   expect(controls.map((control) => control.props.label)).toEqual([
-    "后退",
+    "收藏",
     "前进",
     "刷新",
     "保存离线",
@@ -164,7 +187,211 @@ it("places browser navigation and offline controls in the top bar as icon-only a
     tree.root
       .findAllByType("Action" as any)
       .map((action) => action.props.label),
-  ).toEqual(["前往"]);
+  ).toEqual(["返回", "收藏", "前进", "刷新", "保存离线", "存储管理", "前往"]);
+});
+it("uses a compact safe-area toolbar for the Android browser tab", async () => {
+  await render(React.createElement(BrowserScreen));
+
+  const options = env.navigation.setOptions.mock.calls.at(-1)?.[0];
+
+  expect(options?.headerShown).toBe(false);
+  expect(tree.root.findByType("SafeAreaView" as any).props.edges).toEqual([
+    "top",
+  ]);
+  expect(
+    tree.root
+      .findAllByType("Action" as any)
+      .some((action) => action.props.label === "返回"),
+  ).toBe(true);
+});
+it("uses the Android toolbar title as a browser back arrow", async () => {
+  await render(React.createElement(BrowserScreen));
+
+  const webView = tree.root.findByType("WebView" as any);
+  const initialBackControl = tree.root.findByProps({ label: "返回" });
+  expect(initialBackControl.props.icon).toBe("arrow-left");
+  expect(initialBackControl.props.iconOnly).toBe(true);
+  expect(initialBackControl.props.disabled).toBe(true);
+
+  await act(async () =>
+    webView.props.onNavigationStateChange({
+      url: "https://example.com/previous-page",
+      canGoBack: true,
+      canGoForward: false,
+    }),
+  );
+
+  const backControl = tree.root.findByProps({ label: "返回" });
+  expect(backControl.props.icon).toBe("arrow-left");
+  expect(backControl.props.disabled).toBe(false);
+
+  await act(async () => backControl.props.onPress());
+  expect(env.goBack).toHaveBeenCalledOnce();
+});
+it.each(["android", "ios"] as const)(
+  "lets %s users toggle a saved web bookmark",
+  async (platformOS) => {
+    env.platformOS = platformOS;
+    await render(React.createElement(BrowserScreen));
+
+    const webView = tree.root.findByType("WebView" as any);
+    await act(async () =>
+      webView.props.onNavigationStateChange({
+        url: "https://example.com/article",
+        title: "Example article",
+        canGoBack: true,
+        canGoForward: false,
+      }),
+    );
+
+    const bookmarkAction = () => {
+      const options = env.navigation.setOptions.mock.calls.at(-1)?.[0];
+      return React.Children.toArray(options.headerRight().props.children)[0];
+    };
+    expect((bookmarkAction() as React.ReactElement).props).toMatchObject({
+      label: "收藏",
+      icon: "bookmark",
+    });
+
+    await act(async () =>
+      (
+        (bookmarkAction() as React.ReactElement).props
+          .onPress as () => Promise<void>
+      )(),
+    );
+    expect(await library.bookmarks()).toMatchObject([
+      {
+        url: "https://example.com/article",
+        title: "Example article",
+      },
+    ]);
+    expect((bookmarkAction() as React.ReactElement).props).toMatchObject({
+      label: "取消收藏",
+      icon: "check",
+    });
+
+    await act(async () =>
+      (
+        (bookmarkAction() as React.ReactElement).props
+          .onPress as () => Promise<void>
+      )(),
+    );
+    expect(await library.bookmarks()).toEqual([]);
+  },
+);
+it("uses the iOS browser header as a browser back arrow", async () => {
+  env.platformOS = "ios";
+  await render(React.createElement(BrowserScreen));
+
+  let options = env.navigation.setOptions.mock.calls.at(-1)?.[0];
+  expect(options?.headerShown).toBe(true);
+  expect(options?.headerTitle).toBeTypeOf("function");
+  let title = options.headerTitle();
+  expect(title.props.label).toBe("返回");
+  expect(title.props.icon).toBe("arrow-left");
+  expect(title.props.iconOnly).toBe(true);
+  expect(title.props.disabled).toBe(true);
+
+  const webView = tree.root.findByType("WebView" as any);
+  await act(async () =>
+    webView.props.onNavigationStateChange({
+      url: "https://example.com/previous-page",
+      canGoBack: true,
+      canGoForward: false,
+    }),
+  );
+
+  options = env.navigation.setOptions.mock.calls.at(-1)?.[0];
+  title = options.headerTitle();
+  expect(title.props.icon).toBe("arrow-left");
+  expect(title.props.disabled).toBe(false);
+
+  await act(async () => title.props.onPress());
+  expect(env.goBack).toHaveBeenCalledOnce();
+});
+it("opens a bookmarked web page from the favorites list", async () => {
+  await library.toggleBookmark("https://example.com/saved", "Saved article");
+  await render(React.createElement(FavoritesScreen));
+
+  await vi.waitFor(() =>
+    expect(tree.root.findByType("FlatList" as any).props.data).toMatchObject([
+      { url: "https://example.com/saved", title: "Saved article" },
+    ]),
+  );
+  const favorites = tree.root.findByType("FlatList" as any);
+  const rowElement = favorites.props.renderItem({
+    item: favorites.props.data[0],
+  });
+  expect(rowElement.props.icon).toBe("bookmark");
+  expect(rowElement.props.subtitle).toBe("https://example.com/saved");
+
+  await act(async () => rowElement.props.onPress());
+  expect(env.navigation.navigate).toHaveBeenCalledWith("BrowserPage", {
+    url: "https://example.com/saved",
+  });
+});
+it("removes a bookmark from the favorites list management action", async () => {
+  await library.toggleBookmark("https://example.com/remove", "Remove me");
+  await render(React.createElement(FavoritesScreen));
+
+  await vi.waitFor(() =>
+    expect(tree.root.findByType("FlatList" as any).props.data).toHaveLength(1),
+  );
+  const list = tree.root.findByType("FlatList" as any);
+  const rowElement = list.props.renderItem({ item: list.props.data[0] });
+  await act(async () => rowElement.props.onLongPress());
+
+  const { Alert } = await import("react-native");
+  const managementButtons = vi.mocked(Alert.alert).mock.calls.at(-1)?.[2];
+  await act(async () => managementButtons?.[1]?.onPress?.());
+
+  expect(await library.bookmarks()).toEqual([]);
+});
+it("saves from the browser in reader mode and silently stays on the page", async () => {
+  await render(React.createElement(BrowserScreen));
+  const controls = React.Children.toArray(
+    env.navigation.setOptions.mock.calls.at(-1)?.[0].headerRight().props
+      .children,
+  ) as React.ReactElement[];
+
+  await act(async () => controls[3]!.props.onPress());
+  await vi.waitFor(() => expect(env.inject).toHaveBeenCalled());
+  expect(env.inject.mock.calls[0]![0]).toContain('"reader"');
+
+  const webView = tree.root.findByType("WebView" as any);
+  await act(async () => {
+    await webView.props.onMessage({
+      nativeEvent: {
+        data: JSON.stringify({
+          id: "capture-id",
+          type: "CAPTURE_START",
+          url: "https://example.com/article",
+          title: "Example page",
+          mode: "reader",
+          length: 0,
+        }),
+      },
+    });
+    await webView.props.onMessage({
+      nativeEvent: {
+        data: JSON.stringify({ id: "capture-id", type: "CAPTURE_END" }),
+      },
+    });
+  });
+
+  expect(env.offlineSave.mock.calls[0]![0].mode).toBe("reader");
+  expect(env.navigation.navigate).not.toHaveBeenCalled();
+  expect(tree.root.findAllByType("WebView" as any)).toHaveLength(1);
+  expect(
+    vi.mocked((await import("react-native")).Alert.alert),
+  ).not.toHaveBeenCalled();
+});
+it("does not render the web-page load percentage row", async () => {
+  await render(React.createElement(BrowserScreen));
+
+  const webView = tree.root.findByType("WebView" as any);
+  expect(webView.props.onLoadProgress).toBeUndefined();
+  expect(tree.root.findAllByType("Busy" as any)).toHaveLength(0);
 });
 it("reassociating an unchanged resource ID remounts prepared content and completes loading", async () => {
   const original = { ...row(), warnings: ["missing image"] };

@@ -16,6 +16,7 @@ import { LibraryScreen } from "./src/screens/LibraryScreen";
 import { DirectoryScreen } from "./src/screens/DirectoryScreen";
 import { ReaderScreen, DiagramScreen } from "./src/screens/ReaderScreen";
 import { BrowserScreen } from "./src/screens/BrowserScreen";
+import { FavoritesScreen } from "./src/screens/FavoritesScreen";
 import { SettingsScreen } from "./src/screens/SettingsScreen";
 import { Action } from "./src/components/ui";
 const Stack = createNativeStackNavigator<RootStack>(),
@@ -67,8 +68,9 @@ function Home() {
                 Recent: "clock",
                 Files: "folder",
                 Offline: "download",
+                Favorites: "bookmark",
                 Browser: "globe",
-              }[route.name] as "clock"
+              }[route.name] as React.ComponentProps<typeof Feather>["name"]
             }
           />
         ),
@@ -84,6 +86,11 @@ function Home() {
         name="Offline"
         component={Offline}
         options={{ title: "离线" }}
+      />
+      <Tab.Screen
+        name="Favorites"
+        component={FavoritesScreen}
+        options={{ title: "收藏" }}
       />
       <Tab.Screen
         name="Browser"
@@ -136,11 +143,17 @@ function Navigation() {
         <Stack.Screen
           name="Diagram"
           component={DiagramScreen}
-          options={({navigation})=>({
+          options={({ navigation }) => ({
             title: "图表",
             presentation: "fullScreenModal",
             headerBackTitle: "返回",
-            headerLeft:()=> <Action label="关闭" icon="x" onPress={()=>navigation.goBack()}/>,
+            headerLeft: () => (
+              <Action
+                label="关闭"
+                icon="x"
+                onPress={() => navigation.goBack()}
+              />
+            ),
           })}
         />
         <Stack.Screen

@@ -45,6 +45,13 @@ export interface Folder {
   lastOpenedAt: number;
 }
 
+/** 浏览器收藏的网页地址与显示标题；页面正文仍可按需单独保存为离线副本。 */
+export interface Bookmark {
+  url: string;
+  title: string;
+  createdAt: number;
+}
+
 /** WebView 发送给原生端的一份网页快照。HTML 由单独的分块消息传输。 */
 export interface Capture {
   html: string;

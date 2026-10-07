@@ -1,4 +1,10 @@
-import type { Folder, Position, Resource, ResourceStatus } from "../core/types";
+import type {
+  Bookmark,
+  Folder,
+  Position,
+  Resource,
+  ResourceStatus,
+} from "../core/types";
 
 /** SQLite 实例的最小接口，方便业务层测试时换用内存数据库。 */
 export interface Database {
@@ -42,17 +48,18 @@ const toResource = (row: Row): Resource => ({
   mode: row.mode,
 });
 
-/** 管理阅读记录、授权目录和本地副本索引；正文数据本身保存在文件系统中。 */
+/** 管理阅读记录、网页收藏、授权目录和本地副本索引。 */
 export class Library {
   constructor(readonly db: Database) {}
 
-  /** 创建首版 schema。user_version 让后续数据库结构升级可以逐版迁移。 */
+  /** 按 user_version 逐步升级数据库结构，旧版资料与目录记录保持原样。 */
   async initialize() {
     await this.db.execAsync("PRAGMA journal_mode=WAL;");
     const version = await this.db.getFirstAsync<{ user_version: number }>(
       "PRAGMA user_version;",
     );
-    if (!version || version.user_version < 1)
+    let schemaVersion = version?.user_version ?? 0;
+    if (schemaVersion < 1) {
       await this.db.execAsync(`
         BEGIN;
         CREATE TABLE resources (
@@ -90,6 +97,67 @@ export class Library {
         PRAGMA user_version=1;
         COMMIT;
       `);
+      schemaVersion = 1;
+    }
+    if (schemaVersion < 2) {
+      await this.db.execAsync(`
+        BEGIN;
+        CREATE TABLE bookmarks (
+          url TEXT PRIMARY KEY,
+          title TEXT NOT NULL,
+          created_at INTEGER NOT NULL
+        );
+        CREATE INDEX bookmark_order ON bookmarks(created_at DESC, url ASC);
+        PRAGMA user_version=2;
+        COMMIT;
+      `);
+    }
+  }
+
+  /** 查询当前网页是否已收藏。URL 作为唯一键，重复收藏不会产生重复条目。 */
+  async isBookmarked(url: string) {
+    const row = await this.db.getFirstAsync<{ url: string }>(
+      "SELECT url FROM bookmarks WHERE url=?",
+      url,
+    );
+    // SQLite 与测试适配器对“查无记录”分别可能返回 null 或 undefined。
+    return !!row;
+  }
+
+  /** 收藏或取消收藏一个网页，并返回操作后的收藏状态。 */
+  async toggleBookmark(url: string, title: string) {
+    if (await this.isBookmarked(url)) {
+      await this.db.runAsync("DELETE FROM bookmarks WHERE url=?", url);
+      return false;
+    }
+    await this.db.runAsync(
+      "INSERT INTO bookmarks (url, title, created_at) VALUES (?, ?, ?)",
+      url,
+      title.trim() || url,
+      Date.now(),
+    );
+    return true;
+  }
+
+  /** 按最近收藏时间返回网页书签，供收藏列表直接打开。 */
+  async bookmarks(): Promise<Bookmark[]> {
+    const rows = await this.db.getAllAsync<{
+      url: string;
+      title: string;
+      created_at: number;
+    }>(
+      "SELECT url, title, created_at FROM bookmarks ORDER BY created_at DESC, url ASC",
+    );
+    return rows.map((row) => ({
+      url: row.url,
+      title: row.title,
+      createdAt: row.created_at,
+    }));
+  }
+
+  /** 从收藏列表移除网页，不影响对应的离线副本。 */
+  async removeBookmark(url: string) {
+    await this.db.runAsync("DELETE FROM bookmarks WHERE url=?", url);
   }
   async get(id: string) {
     const row = await this.db.getFirstAsync<Row>(

@@ -13,5 +13,6 @@ export type Tabs = {
   Recent: undefined;
   Files: undefined;
   Offline: undefined;
+  Favorites: undefined;
   Browser: undefined;
 };

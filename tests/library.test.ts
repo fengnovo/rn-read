@@ -91,3 +91,60 @@ it("keeps identity, local copy and position when the same source is reimported",
   expect((await library.recent()).length).toBe(0);
   db.close();
 });
+it("persists browser bookmarks and removes them when toggled off", async () => {
+  const db = new DatabaseSync(":memory:");
+  const library = new Library({
+    execAsync: async (sql) => {
+      db.exec(sql);
+    },
+    runAsync: async (sql, ...args) => {
+      db.prepare(sql).run(...args);
+    },
+    getAllAsync: async <T>(sql: string, ...args: any[]) =>
+      db.prepare(sql).all(...args) as T[],
+    getFirstAsync: async <T>(sql: string, ...args: any[]) =>
+      db.prepare(sql).get(...args) as T | null,
+  });
+  await library.initialize();
+
+  expect(await library.isBookmarked("https://example.com/guide")).toBe(false);
+  expect(
+    await library.toggleBookmark("https://example.com/guide", "Example guide"),
+  ).toBe(true);
+  expect(await library.isBookmarked("https://example.com/guide")).toBe(true);
+  expect(await library.bookmarks()).toMatchObject([
+    { url: "https://example.com/guide", title: "Example guide" },
+  ]);
+
+  expect(
+    await library.toggleBookmark("https://example.com/guide", "Example guide"),
+  ).toBe(false);
+  expect(await library.bookmarks()).toEqual([]);
+  db.close();
+});
+it("migrates an existing version-one database to bookmark storage", async () => {
+  const db = new DatabaseSync(":memory:");
+  db.exec("PRAGMA user_version=1;");
+  const library = new Library({
+    execAsync: async (sql) => {
+      db.exec(sql);
+    },
+    runAsync: async (sql, ...args) => {
+      db.prepare(sql).run(...args);
+    },
+    getAllAsync: async <T>(sql: string, ...args: any[]) =>
+      db.prepare(sql).all(...args) as T[],
+    getFirstAsync: async <T>(sql: string, ...args: any[]) =>
+      db.prepare(sql).get(...args) as T | null,
+  });
+
+  await library.initialize();
+
+  expect(db.prepare("PRAGMA user_version;").get()).toMatchObject({
+    user_version: 2,
+  });
+  expect(await library.toggleBookmark("https://example.com", "Example")).toBe(
+    true,
+  );
+  db.close();
+});
