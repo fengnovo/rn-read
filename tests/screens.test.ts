@@ -189,6 +189,44 @@ it("places browser navigation and offline controls in the top bar as icon-only a
       .map((action) => action.props.label),
   ).toEqual(["返回", "收藏", "前进", "刷新", "保存离线", "存储管理", "前往"]);
 });
+it("separates Markdown and PDF file selection from adding a folder", async () => {
+  const documents = {
+    chooseMarkdownFile: vi.fn().mockResolvedValue({ id: "markdown-id" }),
+    choosePdfFile: vi.fn().mockResolvedValue({ id: "pdf-id" }),
+    chooseFolder: vi.fn().mockResolvedValue({ id: "folder-id" }),
+  };
+  env.services.documents = documents;
+  await render(React.createElement(LibraryScreen, { mode: "files" }));
+
+  const actions = tree.root.findAllByType("Action" as any);
+  expect(actions.map((action) => action.props.label)).toEqual([
+    "打开 Markdown",
+    "打开 PDF",
+    "添加文件夹",
+  ]);
+
+  await act(async () => actions[0]!.props.onPress());
+  expect(documents.chooseMarkdownFile).toHaveBeenCalledOnce();
+  expect(env.navigation.navigate).toHaveBeenCalledWith("Reader", {
+    id: "markdown-id",
+  });
+
+  await act(async () =>
+    tree.root.findByProps({ label: "打开 PDF" }).props.onPress(),
+  );
+  expect(documents.choosePdfFile).toHaveBeenCalledOnce();
+  expect(env.navigation.navigate).toHaveBeenCalledWith("Reader", {
+    id: "pdf-id",
+  });
+
+  await act(async () =>
+    tree.root.findByProps({ label: "添加文件夹" }).props.onPress(),
+  );
+  expect(documents.chooseFolder).toHaveBeenCalledOnce();
+  expect(env.navigation.navigate).toHaveBeenCalledWith("Directory", {
+    id: "folder-id",
+  });
+});
 it("uses a compact safe-area toolbar for the Android browser tab", async () => {
   await render(React.createElement(BrowserScreen));
 

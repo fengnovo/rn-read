@@ -6,12 +6,32 @@ const native = vi.hoisted(() => ({
   identity: vi.fn(),
   copyToLocal: vi.fn(),
   content: new Map<string, string>(),
+  platformOS: "android",
 }));
 const picker = vi.hoisted(() => ({ pick: vi.fn(), pickDirectory: vi.fn() }));
+vi.mock("react-native", () => ({
+  Platform: {
+    get OS() {
+      return native.platformOS;
+    },
+  },
+}));
 vi.mock("../modules/document-access", () => native);
 vi.mock("@react-native-documents/picker", () => ({
   ...picker,
-  types: { allFiles: "all" },
+  get types() {
+    return native.platformOS === "ios"
+      ? {
+          allFiles: "public.item",
+          plainText: "public.plain-text",
+          pdf: "com.adobe.pdf",
+        }
+      : {
+          allFiles: "*/*",
+          plainText: "text/plain",
+          pdf: "application/pdf",
+        };
+  },
   isErrorWithCode: () => false,
   errorCodes: {},
 }));
@@ -47,7 +67,78 @@ const openLibrary = async () => {
   await library.initialize();
   return { db, library };
 };
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  native.platformOS = "android";
+});
+it.each([
+  ["android", ["text/plain", "text/markdown", "application/x-markdown"]],
+  ["ios", ["public.plain-text", "net.daringfireball.markdown"]],
+] as const)(
+  "limits the %s Markdown picker to text and Markdown types",
+  async (platformOS, fileTypes) => {
+    native.platformOS = platformOS;
+    picker.pick.mockResolvedValue([
+      { uri: "source.md", name: "notes.md", bookmark: "grant" },
+    ]);
+    native.identity.mockResolvedValue({ identity: "notes", uri: "source.md" });
+    native.copyToLocal.mockImplementation(async (_: string, target: string) => {
+      native.content.set(target, "# Notes");
+    });
+
+    const { db, library } = await openLibrary();
+    await new Documents(library).chooseMarkdownFile();
+
+    expect(picker.pick).toHaveBeenCalledWith({
+      mode: "open",
+      requestLongTermAccess: true,
+      type: fileTypes,
+    });
+    expect((await library.recent())[0]?.type).toBe("markdown");
+    db.close();
+  },
+);
+
+it.each([
+  ["android", "application/pdf"],
+  ["ios", "com.adobe.pdf"],
+] as const)(
+  "limits the %s PDF picker to PDF documents",
+  async (platformOS, fileType) => {
+    native.platformOS = platformOS;
+    picker.pick.mockResolvedValue([
+      { uri: "source.pdf", name: "notes.pdf", bookmark: "grant" },
+    ]);
+    native.identity.mockResolvedValue({
+      identity: "notes-pdf",
+      uri: "source.pdf",
+    });
+
+    const { db, library } = await openLibrary();
+    await new Documents(library).choosePdfFile();
+
+    expect(picker.pick).toHaveBeenCalledWith({
+      mode: "open",
+      requestLongTermAccess: true,
+      type: [fileType],
+    });
+    expect((await library.recent())[0]?.type).toBe("pdf");
+    db.close();
+  },
+);
+
+it("rejects a file type that a document provider shows outside the Markdown filter", async () => {
+  picker.pick.mockResolvedValue([
+    { uri: "source.pdf", name: "notes.pdf", bookmark: "grant" },
+  ]);
+
+  const { db, library } = await openLibrary();
+  await expect(new Documents(library).chooseMarkdownFile()).rejects.toThrow(
+    "请选择 Markdown 或 TXT 文件",
+  );
+  expect(native.identity).not.toHaveBeenCalled();
+  db.close();
+});
 it("persists refreshed root URI and bookmark across directory reopen and subdirectory resolution", async () => {
   const { db, library } = await openLibrary();
   const folder = {

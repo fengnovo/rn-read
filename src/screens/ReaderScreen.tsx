@@ -293,15 +293,28 @@ export function ReaderScreen({
           <Text accessibilityRole="alert" style={{ color: colors.danger }}>
             {error}
           </Text>
-          <Action
-            label="重新导入文件"
-            onPress={() => {
-              void documents
-                .chooseFile()
-                .then((r) => navigation.replace("Reader", { id: r.id }))
-                .catch(showError);
-            }}
-          />
+          {resource?.type === "markdown" && (
+            <Action
+              label="重新选择 Markdown 文件"
+              onPress={() => {
+                void documents
+                  .chooseMarkdownFile()
+                  .then((r) => navigation.replace("Reader", { id: r.id }))
+                  .catch(showError);
+              }}
+            />
+          )}
+          {resource?.type === "pdf" && (
+            <Action
+              label="重新选择 PDF 文件"
+              onPress={() => {
+                void documents
+                  .choosePdfFile()
+                  .then((r) => navigation.replace("Reader", { id: r.id }))
+                  .catch(showError);
+              }}
+            />
+          )}
         </View>
       )}
       <View

@@ -5,6 +5,7 @@ import {
   isErrorWithCode,
   errorCodes,
 } from "@react-native-documents/picker";
+import { Platform } from "react-native";
 import * as Crypto from "expo-crypto";
 import { createMarkdown } from "../core/markdown";
 import {
@@ -24,20 +25,47 @@ export const hash = (value: string) =>
 export const cancelled = (error: unknown) =>
   isErrorWithCode(error) && error.code === errorCodes.OPERATION_CANCELED;
 
+/** 让系统选择器优先只显示项目可以直接导入的文件类型。 */
+function pickerTypesForMarkdown() {
+  return Platform.OS === "ios"
+    ? [types.plainText, "net.daringfireball.markdown"]
+    : [types.plainText, "text/markdown", "application/x-markdown"];
+}
+
 /** 管理外部文件与目录授权，并把可读资料复制到应用沙盒。 */
 export class Documents {
   constructor(private library: Library) {}
 
-  /** 通过系统文件选择器选取一个文件并导入本地副本。 */
-  async chooseFile() {
+  /** 从系统文件选择器中选择 Markdown / TXT，并导入本地副本。 */
+  async chooseMarkdownFile() {
+    return this.chooseFile(
+      pickerTypesForMarkdown(),
+      /\.(md|markdown|txt)$/i,
+      "请选择 Markdown 或 TXT 文件",
+    );
+  }
+
+  /** 从系统文件选择器中只选择 PDF，并导入本地副本。 */
+  async choosePdfFile() {
+    return this.chooseFile([types.pdf], /\.pdf$/i, "请选择 PDF 文件");
+  }
+
+  /** 系统选择器类型作为筛选；再校验扩展名，兼顾忽略筛选条件的文件提供方。 */
+  private async chooseFile(
+    allowedTypes: string[],
+    allowedExtension: RegExp,
+    errorMessage: string,
+  ) {
     const [selection] = await pick({
       mode: "open",
       requestLongTermAccess: true,
-      type: [types.allFiles],
+      type: allowedTypes,
     });
+    const fileName = selection.name ?? "文档";
+    if (!allowedExtension.test(fileName)) throw Error(errorMessage);
     return this.importFile(
       selection.uri,
-      selection.name ?? "文档",
+      fileName,
       undefined,
       undefined,
       "bookmark" in selection ? selection.bookmark : undefined,

@@ -144,15 +144,24 @@ export function LibraryScreen({
       };
     }, [refresh, ready]),
   );
-  const choose = async (chooseDirectory: boolean) => {
-    setBusy(chooseDirectory ? "正在授权目录…" : "正在导入文件与图片…");
+  const choose = async (kind: "markdown" | "pdf" | "folder") => {
+    setBusy(
+      kind === "folder"
+        ? "正在授权目录…"
+        : kind === "pdf"
+          ? "正在导入 PDF…"
+          : "正在导入 Markdown…",
+    );
     try {
       await ready;
-      if (chooseDirectory) {
+      if (kind === "folder") {
         const folder = await documents.chooseFolder();
         navigation.navigate("Directory", { id: folder.id });
       } else {
-        const resource = await documents.chooseFile();
+        const resource =
+          kind === "pdf"
+            ? await documents.choosePdfFile()
+            : await documents.chooseMarkdownFile();
         navigation.navigate("Reader", { id: resource.id });
       }
       await refresh();
@@ -211,10 +220,18 @@ export function LibraryScreen({
         <View style={styles.actions}>
           <Action
             icon="file-plus"
-            label="打开文件"
+            label="打开 Markdown"
             primary
             onPress={() => {
-              void choose(false);
+              void choose("markdown");
+            }}
+            disabled={!!busy}
+          />
+          <Action
+            icon="file-text"
+            label="打开 PDF"
+            onPress={() => {
+              void choose("pdf");
             }}
             disabled={!!busy}
           />
@@ -222,7 +239,7 @@ export function LibraryScreen({
             icon="folder-plus"
             label="添加文件夹"
             onPress={() => {
-              void choose(true);
+              void choose("folder");
             }}
             disabled={!!busy}
           />
