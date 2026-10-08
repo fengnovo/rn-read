@@ -29,6 +29,7 @@ vi.mock("react-native", () => ({
   Pressable: "Pressable",
   Text: "Text",
   TextInput: "TextInput",
+  KeyboardAvoidingView: "KeyboardAvoidingView",
   FlatList: "FlatList",
   Alert: { alert: vi.fn() },
   Platform: {
@@ -242,6 +243,30 @@ it("uses a compact safe-area toolbar for the Android browser tab", async () => {
       .some((action) => action.props.label === "返回"),
   ).toBe(true);
 });
+it("shrinks the Android web page area when the keyboard opens", async () => {
+  await render(React.createElement(BrowserScreen));
+
+  const keyboardArea = tree.root.findByType("KeyboardAvoidingView" as any);
+  expect(keyboardArea.props.behavior).toBe("height");
+  expect(keyboardArea.props.style).toMatchObject({ flex: 1 });
+  expect(keyboardArea.findByType("WebView" as any)).toBeDefined();
+});
+it("opens Android popup links in the current embedded browser", async () => {
+  await render(React.createElement(BrowserScreen));
+
+  const webView = tree.root.findByType("WebView" as any);
+  expect(webView.props.onOpenWindow).toBeTypeOf("function");
+
+  await act(async () =>
+    webView.props.onOpenWindow({
+      nativeEvent: { targetUrl: "https://example.com/new-window" },
+    }),
+  );
+
+  expect(webView.props.source).toEqual({
+    uri: "https://example.com/new-window",
+  });
+});
 it("uses the Android toolbar title as a browser back arrow", async () => {
   await render(React.createElement(BrowserScreen));
 
@@ -331,6 +356,10 @@ it("uses the iOS browser header as a browser back arrow", async () => {
   expect(title.props.disabled).toBe(true);
 
   const webView = tree.root.findByType("WebView" as any);
+  expect(tree.root.findAllByType("KeyboardAvoidingView" as any)).toHaveLength(
+    0,
+  );
+  expect(webView.props.onOpenWindow).toBeUndefined();
   await act(async () =>
     webView.props.onNavigationStateChange({
       url: "https://example.com/previous-page",

@@ -5,7 +5,14 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { Alert, Platform, Text, TextInput, View } from "react-native";
+import {
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
 import { WebView } from "react-native-webview";
 import { useNavigation, useRoute } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
@@ -215,6 +222,50 @@ export function BrowserScreen() {
     toggleBookmark,
     useCompactAndroidToolbar,
   ]);
+  const browserWebViewElement = (
+    <WebView
+      ref={browserWebView}
+      source={{ uri: url }}
+      javaScriptEnabled
+      domStorageEnabled
+      onError={(e) => Alert.alert("网页无法加载", e.nativeEvent.description)}
+      onMessage={(e) => {
+        void onMessage(e.nativeEvent.data);
+      }}
+      onOpenWindow={
+        Platform.OS === "android"
+          ? ({ nativeEvent }) => {
+              // Android 的 target="_blank" 会创建额外窗口；把普通网页链接交给当前 WebView。
+              if (/^https?:\/\//i.test(nativeEvent.targetUrl)) {
+                setUrl(nativeEvent.targetUrl);
+              }
+            }
+          : undefined
+      }
+      onShouldStartLoadWithRequest={(r) =>
+        /^https?:\/\//i.test(r.url) || r.url === "about:blank"
+      }
+      onNavigationStateChange={(state) => {
+        // 捕获期间跳到新页面就取消，避免把下一个页面误存为当前快照。
+        if (activeCapture.current && state.url !== currentPageUrl.current)
+          cancel();
+        currentPageUrl.current = state.url;
+        currentPageTitle.current = state.title?.trim() || state.url;
+        setAddress(state.url);
+        void library
+          .isBookmarked(state.url)
+          .then((saved) => {
+            if (currentPageUrl.current === state.url) setBookmarked(saved);
+          })
+          .catch(showError);
+        setNavigationState({
+          back: state.canGoBack,
+          forward: state.canGoForward,
+        });
+      }}
+      style={{ flex: 1 }}
+    />
+  );
   return (
     <SafeAreaView
       edges={useCompactAndroidToolbar ? ["top"] : []}
@@ -271,38 +322,13 @@ export function BrowserScreen() {
           <Action label="取消保存" onPress={cancel} />
         </View>
       ) : null}
-      <WebView
-        ref={browserWebView}
-        source={{ uri: url }}
-        javaScriptEnabled
-        domStorageEnabled
-        onError={(e) => Alert.alert("网页无法加载", e.nativeEvent.description)}
-        onMessage={(e) => {
-          void onMessage(e.nativeEvent.data);
-        }}
-        onShouldStartLoadWithRequest={(r) =>
-          /^https?:\/\//i.test(r.url) || r.url === "about:blank"
-        }
-        onNavigationStateChange={(state) => {
-          // 捕获期间跳到新页面就取消，避免把下一个页面误存为当前快照。
-          if (activeCapture.current && state.url !== currentPageUrl.current)
-            cancel();
-          currentPageUrl.current = state.url;
-          currentPageTitle.current = state.title?.trim() || state.url;
-          setAddress(state.url);
-          void library
-            .isBookmarked(state.url)
-            .then((saved) => {
-              if (currentPageUrl.current === state.url) setBookmarked(saved);
-            })
-            .catch(showError);
-          setNavigationState({
-            back: state.canGoBack,
-            forward: state.canGoForward,
-          });
-        }}
-        style={{ flex: 1 }}
-      />
+      {Platform.OS === "android" ? (
+        <KeyboardAvoidingView behavior="height" style={{ flex: 1 }}>
+          {browserWebViewElement}
+        </KeyboardAvoidingView>
+      ) : (
+        browserWebViewElement
+      )}
     </SafeAreaView>
   );
 }
